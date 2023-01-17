@@ -1,12 +1,8 @@
-using Shadowsocks.Models;
 using Splat;
 using System;
 using System.Collections.Generic;
 using System.CommandLine;
 using System.CommandLine.Invocation;
-using System.Diagnostics;
-using System.Linq;
-using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,11 +11,28 @@ namespace Shadowsocks.CLI
 {
     internal class Program
     {
-        private static Task<int> Main(string[] args)
+        private static Guid AppGuid = Guid.Parse("DA5CA4E7-86CA-4BA0-8648-1CEEC0439950");
+
+        private static async Task<int> Main(string[] args)
+        {
+            using (Mutex mutex = new Mutex(false, "Global\\" + AppGuid))
+            {
+                if (!mutex.WaitOne(0, false))
+                {
+                    Console.WriteLine("Another instance of the application is already running");
+                    return 999;
+                }
+
+                return await InternalMain(args);
+            }
+        }
+
+        private static Task<int> InternalMain(string[] args)
         {
             var clientCommand = new Command("client", "Shadowsocks client.");
             clientCommand.AddAlias("c");
-            clientCommand.AddOption(new Option<Backend>("--backend", "Shadowsocks backend to use. Available backends: shadowsocks-rust, v2ray, legacy, pipelines."));
+            clientCommand.AddOption(new Option<string>("--ssurl", "Shadowsocks ss:// url for legacy client"));
+            clientCommand.AddOption(new Option<Backend?>("--backend", "Shadowsocks backend to use. Available backends: shadowsocks-rust, v2ray, legacy, pipelines. Default value is legacy"));
             clientCommand.AddOption(new Option<string?>("--listen", "Address and port to listen on for both SOCKS5 and HTTP proxy."));
             clientCommand.AddOption(new Option<string?>("--listen-socks", "Address and port to listen on for SOCKS5 proxy."));
             clientCommand.AddOption(new Option<string?>("--listen-http", "Address and port to listen on for HTTP proxy."));
@@ -32,12 +45,13 @@ namespace Shadowsocks.CLI
             clientCommand.AddOption(new Option<string?>("--plugin-opts", "Plugin options."));
             clientCommand.AddOption(new Option<string?>("--plugin-args", "Plugin startup arguments."));
             clientCommand.Handler = CommandHandler.Create(
-                async (Backend backend, string? listen, string? listenSocks, string? listenHttp, string serverAddress, int serverPort, string method, string? password, string? key, string? plugin, string? pluginOpts, string? pluginArgs, CancellationToken cancellationToken) =>
+                async (string ssUrl, Backend? backend, string? listen, string? listenSocks, string? listenHttp, string serverAddress, int serverPort, string method, string? password, string? key, string? plugin, string? pluginOpts, string? pluginArgs, CancellationToken cancellationToken) =>
                 {
                     Locator.CurrentMutable.RegisterConstant<ConsoleLogger>(new());
                     if (string.IsNullOrEmpty(listenSocks))
                     {
-                        LogHost.Default.Error("You must specify SOCKS5 listen address and port.");
+                        listenSocks = "127.0.0.1:" + new Random().Next(8000, 9000);
+                        LogHost.Default.Error($"Will listen on {listenSocks}.");
                         return;
                     }
 
@@ -52,21 +66,27 @@ namespace Shadowsocks.CLI
                         case Backend.V2Ray:
                             LogHost.Default.Error("Not implemented.");
                             break;
-                        case Backend.Legacy:
-                            if (!string.IsNullOrEmpty(password))
-                            {
-                                legacyClient = new();
-                                legacyClient.Start(listenSocks, serverAddress, serverPort, method, password, plugin, pluginOpts, pluginArgs);
-                            }
-                            else
-                                LogHost.Default.Error("The legacy backend requires password.");
-                            break;
+
                         case Backend.Pipelines:
                             pipelinesClient = new();
                             await pipelinesClient.Start(listenSocks, serverAddress, serverPort, method, password, key, plugin, pluginOpts, pluginArgs);
                             break;
+                        case Backend.Legacy:
                         default:
-                            LogHost.Default.Error("Not implemented.");
+                            legacyClient = new();
+
+                            legacyClient.Start(
+                                ssUri: Uri.TryCreate(ssUrl, UriKind.Absolute, out var parsedUri)
+                                    ? parsedUri
+                                    : null,
+                                listenSocks: listenSocks,
+                                serverAddress: serverAddress,
+                                serverPort: serverPort,
+                                method: method,
+                                password: password,
+                                plugin: plugin,
+                                pluginOpts: pluginOpts,
+                                pluginArgs: pluginArgs);
                             break;
                     }
 

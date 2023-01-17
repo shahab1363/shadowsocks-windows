@@ -14,19 +14,28 @@ namespace Shadowsocks.CLI.Client
     {
         private TCPListener? _tcpListener;
         private UDPListener? _udpListener;
-        
-        public void Start(string listenSocks, string serverAddress, int serverPort, string method, string password, string? plugin, string? pluginOpts, string? pluginArgs)
+
+        public void Start(Uri? ssUri, string listenSocks, string serverAddress, int serverPort, string method, string? password, string? plugin, string? pluginOpts, string? pluginArgs)
         {
             var localEP = IPEndPoint.Parse(listenSocks);
-            var server = new Server()
+            if (ssUri == null || !Server.TryParse(ssUri, out var server))
             {
-                Host = serverAddress,
-                Port = serverPort,
-                Method = method,
-                Password = password,
-                Plugin = plugin,
-                PluginOpts = pluginOpts,
-            };
+                server = new Server()
+                {
+                    Host = serverAddress,
+                    Port = serverPort,
+                    Method = method,
+                    Password = password,
+                    Plugin = plugin,
+                    PluginOpts = pluginOpts,
+                };
+            }
+
+            if (string.IsNullOrEmpty(server.Password))
+            {
+                throw new Exception("The legacy backend requires password.");
+            }
+
             if (!string.IsNullOrEmpty(plugin) && !string.IsNullOrEmpty(pluginArgs))
             {
                 var processStartInfo = new ProcessStartInfo(plugin, pluginArgs);
